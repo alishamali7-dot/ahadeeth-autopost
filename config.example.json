@@ -1,0 +1,7 @@
+{
+  "TELEGRAM_TOKEN": "PUT-YOUR-BOT-TOKEN-HERE",
+  "TELEGRAM_CHANNEL": "@ahadeeth_14",
+  "IG_TOKEN": "",
+  "IG_USER_ID": "",
+  "PUBLIC_BASE_URL": "https://raw.githubusercontent.com/<user>/<repo>/main"
+}
