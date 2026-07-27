@@ -60,7 +60,9 @@ def post_telegram(img, caption, dry):
         r = requests.post(f"{api}/sendPhoto",
                           data={"chat_id": chan, "caption": short, "parse_mode": "HTML"},
                           files={"photo": f}, timeout=60)
-    r.raise_for_status(); ok = r.json().get("ok")
+    if not r.ok:                                      # Telegram explains itself in the body
+        raise SystemExit(f"Telegram {r.status_code} for chat {chan!r}: {r.text}")
+    ok = r.json().get("ok")
     if ok and short is not caption:                   # long text as a reply under the photo
         mid = r.json()["result"]["message_id"]
         requests.post(f"{api}/sendMessage",
