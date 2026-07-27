@@ -22,10 +22,12 @@ LEDGER    = HERE / "published.json"              # { "001.png": {"telegram": ISO
 TG_LIMIT  = 1024                                 # Telegram photo-caption char limit
 
 def cfg(key, default=None):
-    if os.environ.get(key): return os.environ[key]
+    # .strip(): secrets pasted with a trailing newline turn into bot<token>%0A/sendPhoto → 404
+    if os.environ.get(key): return os.environ[key].strip()
     p = HERE / "config.json"
     if p.exists():
-        return json.loads(p.read_text(encoding="utf-8")).get(key, default)
+        v = json.loads(p.read_text(encoding="utf-8")).get(key, default)
+        return v.strip() if isinstance(v, str) else v
     return default
 
 def load(p, d):
