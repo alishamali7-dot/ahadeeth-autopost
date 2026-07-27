@@ -19,8 +19,10 @@ for orig, meta in master.items():
     src = SRC / orig
     if not src.exists():
         print("[missing]", orig); continue
-    dst = POSTS / meta["ascii"]
-    shutil.copyfile(src, dst)
+    dst = POSTS / meta["ascii"]                       # .jpg — 1080x1350 keeps the repo small
+    from PIL import Image
+    Image.open(src).convert("RGB").resize((1080, 1350), Image.LANCZOS)\
+         .save(dst, quality=92, subsampling=0, optimize=True)
     ascii_caps[meta["ascii"]] = meta["caption"]
     copied += 1
 (HERE / "captions_ascii.json").write_text(json.dumps(ascii_caps, ensure_ascii=False, indent=1), encoding="utf-8")

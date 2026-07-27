@@ -34,7 +34,7 @@ def load(p, d):
 def now(): return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
 
 def images():
-    return sorted(glob.glob(str(POSTS_DIR / "*.png")))
+    return sorted(glob.glob(str(POSTS_DIR / "*.jpg")))
 
 def next_unpublished(ledger, platform):
     for img in images():
@@ -53,16 +53,17 @@ def post_telegram(img, caption, dry):
         raise SystemExit("Missing TELEGRAM_TOKEN / TELEGRAM_CHANNEL")
     import requests
     api = f"https://api.telegram.org/bot{token}"
+    short = caption if len(caption) <= TG_LIMIT else caption.split("\n\n")[0]   # title only
     with open(img, "rb") as f:
-        if len(caption) <= TG_LIMIT:
-            r = requests.post(f"{api}/sendPhoto",
-                              data={"chat_id": chan, "caption": caption}, files={"photo": f}, timeout=60)
-        else:
-            r = requests.post(f"{api}/sendPhoto", data={"chat_id": chan}, files={"photo": f}, timeout=60)
+        r = requests.post(f"{api}/sendPhoto",
+                          data={"chat_id": chan, "caption": short, "parse_mode": "HTML"},
+                          files={"photo": f}, timeout=60)
     r.raise_for_status(); ok = r.json().get("ok")
-    if ok and len(caption) > TG_LIMIT:                # long text as a follow-up message
+    if ok and short is not caption:                   # long text as a reply under the photo
+        mid = r.json()["result"]["message_id"]
         requests.post(f"{api}/sendMessage",
-                      data={"chat_id": chan, "text": caption[:4096]}, timeout=60).raise_for_status()
+                      data={"chat_id": chan, "text": caption[:4096], "parse_mode": "HTML",
+                            "reply_to_message_id": mid}, timeout=60).raise_for_status()
     if not ok: raise SystemExit(f"Telegram error: {r.text}")
     return True
 
@@ -71,6 +72,7 @@ def post_instagram(img, caption, dry):
     token, uid, base = cfg("IG_TOKEN"), cfg("IG_USER_ID"), cfg("PUBLIC_BASE_URL")
     if not (token and uid and base):
         print("[skip] Instagram not configured (IG_TOKEN/IG_USER_ID/PUBLIC_BASE_URL)"); return False
+    caption = caption.replace("<b>", "").replace("</b>", "")            # IG has no HTML
     image_url = base.rstrip("/") + "/posts/" + os.path.basename(img)   # public raw URL
     if dry:
         print(f"[DRY] instagram -> {uid}: {image_url}"); return True
@@ -120,7 +122,7 @@ def main():
         if not img: print("Nothing left to post."); return
         do_post(img, dry, only)
     elif cmd == "post":
-        num = f"{int(args[1]):03d}.png"; img = str(POSTS_DIR / num)
+        num = f"{int(args[1]):03d}.jpg"; img = str(POSTS_DIR / num)
         if not os.path.exists(img): raise SystemExit(f"No such image {num}")
         do_post(img, dry, only)
     else:
