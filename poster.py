@@ -46,33 +46,44 @@ def next_unpublished(ledger, platform):
     return None
 
 # ------------------------------------------------------------ Telegram
-def post_telegram(img, caption, dry):
+def parts(entry):
+    """A caption is either the whole text, or {caption, extra} when the takhrij is too long
+    for Telegram's 1024-char photo caption and has to follow as its own message."""
+    if isinstance(entry, dict): return entry.get("caption", ""), entry.get("extra", "")
+    return entry or "", ""
+
+def post_telegram(img, entry, dry):
+    caption, extra = parts(entry)
     token, chan = cfg("TELEGRAM_TOKEN"), cfg("TELEGRAM_CHANNEL")
     if dry:
-        print(f"[DRY] telegram -> {chan or '<no channel set>'}: {os.path.basename(img)} | caption {len(caption)} chars")
+        print(f"[DRY] telegram -> {chan or '<no channel set>'}: {os.path.basename(img)} | "
+              f"caption {len(caption)} chars | follow-up {len(extra)} chars")
         return True
     if not token or not chan:
         raise SystemExit("Missing TELEGRAM_TOKEN / TELEGRAM_CHANNEL")
     import requests
     api = f"https://api.telegram.org/bot{token}"
-    short = caption if len(caption) <= TG_LIMIT else caption.split("\n\n")[0]   # title only
+    if len(caption) > TG_LIMIT:                       # shouldn't happen — captions are built to fit
+        extra, caption = (caption + "\n\n" + extra).strip(), caption.split("\n\n")[0]
     with open(img, "rb") as f:
         r = requests.post(f"{api}/sendPhoto",
-                          data={"chat_id": chan, "caption": short, "parse_mode": "HTML"},
+                          data={"chat_id": chan, "caption": caption, "parse_mode": "HTML"},
                           files={"photo": f}, timeout=60)
     if not r.ok:                                      # Telegram explains itself in the body
         raise SystemExit(f"Telegram {r.status_code} for chat {chan!r}: {r.text}")
     ok = r.json().get("ok")
-    if ok and short is not caption:                   # long text as a reply under the photo
+    if ok and extra:                                  # takhrij as a reply under the photo
         mid = r.json()["result"]["message_id"]
         requests.post(f"{api}/sendMessage",
-                      data={"chat_id": chan, "text": caption[:4096], "parse_mode": "HTML",
+                      data={"chat_id": chan, "text": extra[:4096], "parse_mode": "HTML",
                             "reply_to_message_id": mid}, timeout=60).raise_for_status()
     if not ok: raise SystemExit(f"Telegram error: {r.text}")
     return True
 
 # ------------------------------------------------------------ Instagram (phase 2)
-def post_instagram(img, caption, dry):
+def post_instagram(img, entry, dry):
+    caption, extra = parts(entry)
+    caption = (caption + ("\n\n" + extra if extra else ""))[:2200]      # IG has one caption field
     token, uid, base = cfg("IG_TOKEN"), cfg("IG_USER_ID"), cfg("PUBLIC_BASE_URL")
     if not (token and uid and base):
         print("[skip] Instagram not configured (IG_TOKEN/IG_USER_ID/PUBLIC_BASE_URL)"); return False
