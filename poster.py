@@ -9,6 +9,7 @@ Commands:
   python poster.py post-due  [--dry-run]  # same, but only once per 10:00/22:00 Kuwait slot
   python poster.py post 12   [--dry-run]  # post a specific image number
   python poster.py post-next --platform telegram   # limit to one platform
+  python poster.py ig-check               # verify the Instagram token / id / public image URL
 
 Config comes from env vars (GitHub Actions secrets) or config.json:
   TELEGRAM_TOKEN, TELEGRAM_CHANNEL   (e.g. @ahadeeth_14)
@@ -87,35 +88,46 @@ def post_telegram(img, entry, dry):
                           data={"chat_id": chan, "caption": caption, "parse_mode": "HTML"},
                           files={"photo": f}, timeout=60)
     if not r.ok:                                      # Telegram explains itself in the body
-        raise SystemExit(f"Telegram {r.status_code} for chat {chan!r}: {r.text}")
+        raise RuntimeError(f"Telegram {r.status_code} for chat {chan!r}: {r.text}")
     ok = r.json().get("ok")
     if ok and extra:                                  # takhrij as a reply under the photo
         mid = r.json()["result"]["message_id"]
         requests.post(f"{api}/sendMessage",
                       data={"chat_id": chan, "text": extra[:4096], "parse_mode": "HTML",
                             "reply_to_message_id": mid}, timeout=60).raise_for_status()
-    if not ok: raise SystemExit(f"Telegram error: {r.text}")
+    if not ok: raise RuntimeError(f"Telegram error: {r.text}")
     return True
 
 # ------------------------------------------------------------ Instagram (phase 2)
-def post_instagram(img, entry, dry):
+IG_LIMIT = 2200                                   # Instagram caption limit
+
+def ig_caption(entry):
     caption, extra = parts(entry)
-    caption = (caption + ("\n\n" + extra if extra else ""))[:2200]      # IG has one caption field
+    text = (caption + ("\n\n" + extra if extra else "")).replace("<b>", "").replace("</b>", "")
+    if len(text) <= IG_LIMIT: return text
+    cut = text.rfind("\n", 0, IG_LIMIT - 1)        # drop whole trailing lines, never mid-word
+    return text[:cut].rstrip() + " …"
+
+def graph(method, path, **data):
+    import requests
+    r = getattr(requests, method)(f"https://graph.facebook.com/v21.0/{path}",
+                                  data=data if method == "post" else None,
+                                  params=None if method == "post" else data, timeout=120)
+    if not r.ok:                                   # Meta puts the real reason in the body
+        raise RuntimeError(f"Instagram {r.status_code} on {path}: {r.text}")
+    return r.json()
+
+def post_instagram(img, entry, dry):
     token, uid, base = cfg("IG_TOKEN"), cfg("IG_USER_ID"), cfg("PUBLIC_BASE_URL")
     if not (token and uid and base):
         print("[skip] Instagram not configured (IG_TOKEN/IG_USER_ID/PUBLIC_BASE_URL)"); return False
-    caption = caption.replace("<b>", "").replace("</b>", "")            # IG has no HTML
-    image_url = base.rstrip("/") + "/posts/" + os.path.basename(img)   # public raw URL
+    caption = ig_caption(entry)
+    image_url = base.rstrip("/") + "/posts/" + os.path.basename(img)   # must be publicly reachable
     if dry:
-        print(f"[DRY] instagram -> {uid}: {image_url}"); return True
-    import requests
-    g = "https://graph.facebook.com/v19.0"
-    c = requests.post(f"{g}/{uid}/media",
-                      data={"image_url": image_url, "caption": caption, "access_token": token}, timeout=120)
-    c.raise_for_status(); cid = c.json()["id"]
-    p = requests.post(f"{g}/{uid}/media_publish",
-                      data={"creation_id": cid, "access_token": token}, timeout=120)
-    p.raise_for_status(); return True
+        print(f"[DRY] instagram -> {uid}: {image_url} | caption {len(caption)} chars"); return True
+    cid = graph("post", f"{uid}/media", image_url=image_url, caption=caption, access_token=token)["id"]
+    graph("post", f"{uid}/media_publish", creation_id=cid, access_token=token)
+    return True
 
 PLATFORMS = {"telegram": post_telegram, "instagram": post_instagram}
 
@@ -124,6 +136,7 @@ def do_post(img, dry, only=None):
     caps = load(CAPTIONS, {}); ledger = load(LEDGER, {})
     caption = caps.get(name, "")
     targets = [only] if only else list(PLATFORMS)
+    failed = []
     for plat in targets:
         if plat in ledger.get(name, {}):
             print(f"[skip] {name} already on {plat}"); continue
@@ -131,10 +144,11 @@ def do_post(img, dry, only=None):
             if PLATFORMS[plat](img, caption, dry) and not dry:
                 ledger.setdefault(name, {})[plat] = now()
                 print(f"[ok] {name} -> {plat}")
-        except Exception as e:
-            print(f"[FAIL] {name} -> {plat}: {e}")
-    if not dry:
+        except Exception as e:                      # one platform failing must not lose the other's
+            print(f"[FAIL] {name} -> {plat}: {e}"); failed.append(plat)
+    if not dry:                                     # always record what did go out, then report
         LEDGER.write_text(json.dumps(ledger, ensure_ascii=False, indent=1), encoding="utf-8")
+    return failed
 
 def main():
     args = sys.argv[1:]
@@ -149,6 +163,26 @@ def main():
         print(f"images: {len(imgs)} | telegram posted: {tg} | instagram posted: {ig}")
         nxt = next_unpublished(ledger, only or "telegram")
         print("next:", os.path.basename(nxt) if nxt else "— none left —")
+    elif cmd == "ig-check":                         # verify the Instagram side before scheduling it
+        token, uid, base = cfg("IG_TOKEN"), cfg("IG_USER_ID"), cfg("PUBLIC_BASE_URL")
+        if not token: raise SystemExit("Set IG_TOKEN first (env var or config.json)")
+        if not uid:                                 # discover it from the linked Facebook page
+            pages = graph("get", "me/accounts", access_token=token, fields="name,id").get("data", [])
+            for p in pages:
+                d = graph("get", p["id"], access_token=token, fields="instagram_business_account{id,username}")
+                print(f"page {p['name']} ({p['id']}) -> {d.get('instagram_business_account')}")
+            if not pages: print("no Facebook pages on this token")
+            return
+        me = graph("get", uid, access_token=token, fields="username,followers_count,media_count")
+        print("instagram:", me)
+        if base:
+            import requests
+            u = base.rstrip("/") + "/posts/" + os.path.basename(images()[0])
+            r = requests.head(u, timeout=30, allow_redirects=True)
+            print(f"image url {u} -> HTTP {r.status_code}"
+                  f"{' (must be 200 and public)' if r.status_code != 200 else ''}")
+        else:
+            print("PUBLIC_BASE_URL not set — Instagram needs a public https URL for each image")
     elif cmd in ("post-next", "post-due"):
         ledger = load(LEDGER, {})
         if cmd == "post-due":                       # scheduled path: post once per slot
@@ -160,11 +194,11 @@ def main():
                 print(f"[skip] the {slot:%H:%M}Z slot already has its post"); return
         img = next_unpublished(ledger, only or "telegram")
         if not img: print("Nothing left to post."); return
-        do_post(img, dry, only)
+        if do_post(img, dry, only): sys.exit(1)     # red run when a platform refused
     elif cmd == "post":
         num = f"{int(args[1]):03d}.jpg"; img = str(POSTS_DIR / num)
         if not os.path.exists(img): raise SystemExit(f"No such image {num}")
-        do_post(img, dry, only)
+        if do_post(img, dry, only): sys.exit(1)
     else:
         print(__doc__)
 
