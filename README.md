@@ -51,11 +51,12 @@ python poster.py post-next --dry-run
 - **Actions** (أعلى صفحة الـ repo) → فعّل الـ workflows إذا طلب.
 - افتح **Ahadeeth auto-post → Run workflow** (زر يدوي) وجرّب **dry run = true** أولًا، ثم
   شغّله فعليًا لنشر أول بوست تجريبي.
-- بعد نجاحه، بيشتغل تلقائيًا **7:00 و19:00 UTC** = **10ص و10م بتوقيت الكويت** كل يوم.
+- بعد نجاحه، بيشتغل تلقائيًا: الـ workflow يجرّب كل ١٥ دقيقة داخل نافذتَي **7-9** و**19-21 UTC**،
+  وأول تشغيل ينجح ينشر بوست الفترة (`post-due`) — لأن جدولة GitHub تتأخر أحيانًا ساعات.
 
 ## التحكم اليومي
 - **إيقاف مؤقت**: Actions → الـ workflow → `⋯` → Disable. **تشغيل**: Enable.
-- **تغيير الأوقات**: عدّل سطري `cron` في `.github/workflows/post.yml` (بتوقيت UTC).
+- **تغيير الأوقات**: عدّل `cron` في `.github/workflows/post.yml` و`SLOTS` في `poster.py` (UTC).
 - **نشر يدوي الآن**: Run workflow، أو محليًا `python poster.py post-next`.
 - **الحالة**: `python poster.py status` (كم اننشر وكم باقي).
 

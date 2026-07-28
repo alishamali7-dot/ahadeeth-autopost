@@ -6,6 +6,7 @@ configured, Instagram). Resumable via a ledger; safe to run twice.
 Commands:
   python poster.py status                 # queue + how many posted per platform
   python poster.py post-next [--dry-run]  # post the next unpublished image
+  python poster.py post-due  [--dry-run]  # same, but only once per 10:00/22:00 Kuwait slot
   python poster.py post 12   [--dry-run]  # post a specific image number
   python poster.py post-next --platform telegram   # limit to one platform
 
@@ -16,8 +17,8 @@ Config comes from env vars (GitHub Actions secrets) or config.json:
 import os, sys, json, glob, pathlib, datetime
 
 HERE = pathlib.Path(__file__).parent
-POSTS_DIR = HERE / "posts"                       # ascii-named images: 001.png ...
-CAPTIONS  = HERE / "captions_ascii.json"         # { "001.png": "caption text", ... }
+POSTS_DIR = HERE / "posts"                       # ascii-named images: 001.jpg ...
+CAPTIONS  = HERE / "captions_ascii.json"         # { "001.jpg": caption | {caption, extra} }
 LEDGER    = HERE / "published.json"              # { "001.png": {"telegram": ISO, "instagram": ISO} }
 TG_LIMIT  = 1024                                 # Telegram photo-caption char limit
 
@@ -33,7 +34,23 @@ def cfg(key, default=None):
 def load(p, d):
     return json.loads(p.read_text(encoding="utf-8")) if p.exists() else d
 
-def now(): return datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z"
+def utc(): return datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
+def now(): return utc().isoformat(timespec="seconds") + "Z"
+
+SLOTS  = (7, 19)      # UTC hours = 10:00 and 22:00 Kuwait (UTC+3, no DST)
+WINDOW = 5            # hours a slot stays claimable — GitHub's cron fires late under load
+
+def due_slot(t):
+    """The posting slot t falls into, or None. Cron knocks every 15 min inside the windows;
+    whichever run actually fires first claims the slot, so a delayed cron still posts."""
+    for h in sorted(SLOTS, reverse=True):
+        s = t.replace(hour=h, minute=0, second=0, microsecond=0)
+        if s <= t < s + datetime.timedelta(hours=WINDOW): return s
+    return None
+
+def slot_taken(ledger, slot):
+    stamps = [v[p] for v in ledger.values() for p in v]
+    return any(x >= slot.isoformat(timespec="seconds") + "Z" for x in stamps)
 
 def images():
     return sorted(glob.glob(str(POSTS_DIR / "*.jpg")))
@@ -132,8 +149,16 @@ def main():
         print(f"images: {len(imgs)} | telegram posted: {tg} | instagram posted: {ig}")
         nxt = next_unpublished(ledger, only or "telegram")
         print("next:", os.path.basename(nxt) if nxt else "— none left —")
-    elif cmd == "post-next":
-        img = next_unpublished(load(LEDGER, {}), only or "telegram")
+    elif cmd in ("post-next", "post-due"):
+        ledger = load(LEDGER, {})
+        if cmd == "post-due":                       # scheduled path: post once per slot
+            t = utc()
+            slot = due_slot(t)
+            if not slot:
+                print(f"[skip] {t:%H:%M} UTC is outside a posting window {SLOTS}"); return
+            if slot_taken(ledger, slot):
+                print(f"[skip] the {slot:%H:%M}Z slot already has its post"); return
+        img = next_unpublished(ledger, only or "telegram")
         if not img: print("Nothing left to post."); return
         do_post(img, dry, only)
     elif cmd == "post":

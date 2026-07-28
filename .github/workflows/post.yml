@@ -2,9 +2,11 @@ name: Ahadeeth auto-post
 
 on:
   schedule:
-    # Kuwait is UTC+3. 10:00 Kuwait = 07:00 UTC ; 22:00 Kuwait = 19:00 UTC
-    - cron: "0 7 * * *"
-    - cron: "0 19 * * *"
+    # Kuwait is UTC+3. 10:00 Kuwait = 07:00 UTC ; 22:00 Kuwait = 19:00 UTC.
+    # GitHub's scheduler runs late (hours, sometimes) when the fleet is busy, so we knock every
+    # 10 minutes across the window and poster.py posts only the first run that claims the slot.
+    - cron: "*/15 7-9 * * *"
+    - cron: "*/15 19-21 * * *"
   workflow_dispatch:            # lets you run it manually from the Actions tab
     inputs:
       dry_run:
@@ -36,7 +38,8 @@ jobs:
           IG_USER_ID:       ${{ secrets.IG_USER_ID }}
           PUBLIC_BASE_URL:  ${{ secrets.PUBLIC_BASE_URL }}
         run: |
-          python poster.py post-next ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}
+          CMD=${{ github.event_name == 'schedule' && 'post-due' || 'post-next' }}
+          python poster.py $CMD ${{ (github.event_name == 'workflow_dispatch' && inputs.dry_run) && '--dry-run' || '' }}
       - name: Save ledger
         if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
         run: |
