@@ -70,8 +70,29 @@ def parts(entry):
     if isinstance(entry, dict): return entry.get("caption", ""), entry.get("extra", "")
     return entry or "", ""
 
+TAG_ROOT = "#أحاديث_14"
+HANDLE   = "@ahadeeth_14"
+
+def tagline(entry):
+    """Branded hashtags: one root tag that leads back to the account, plus up to two topic
+    tags from captions.json["tags"]. No tags recorded = root only."""
+    tags = entry.get("tags", []) if isinstance(entry, dict) else []
+    return " ".join([TAG_ROOT] + [f"{TAG_ROOT}_{t}" for t in tags])
+
+def with_tags(text, tags):
+    """Tags sit after the 📖 takhrij and before the handle — the layout of every post already
+    published. No handle (truncated caption, bare follow-up) = tags go last."""
+    head, sep, tail = text.rpartition("\n\n" + HANDLE)
+    return f"{head}\n\n{tags}{sep}{tail}" if sep else (text + "\n\n" + tags).strip()
+
 def post_telegram(img, entry, dry):
     caption, extra = parts(entry)
+    tags, room = tagline(entry), TG_LIMIT - len(caption) - 2
+    if len(tags) > room: tags = TAG_ROOT              # tight caption: keep the account tag, drop
+    if len(tags) <= room:                             # the topic one — a reply holding nothing but
+        caption = with_tags(caption, tags)            # hashtags reads as noise in the channel
+    else:
+        extra = with_tags(extra, tags)
     token, chan = cfg("TELEGRAM_TOKEN"), cfg("TELEGRAM_CHANNEL")
     if dry:
         print(f"[DRY] telegram -> {chan or '<no channel set>'}: {os.path.basename(img)} | "
@@ -104,9 +125,15 @@ IG_LIMIT = 2200                                   # Instagram caption limit
 def ig_caption(entry):
     caption, extra = parts(entry)
     text = (caption + ("\n\n" + extra if extra else "")).replace("<b>", "").replace("</b>", "")
-    if len(text) <= IG_LIMIT: return text
-    cut = text.rfind("\n", 0, IG_LIMIT - 1)        # drop whole trailing lines, never mid-word
-    return text[:cut].rstrip() + " …"
+    tags = tagline(entry)
+    room = IG_LIMIT - len(tags) - 2                # hashtags must survive truncation
+    if len(text) > room:
+        cut = text.rfind("\n", 0, room - 1)        # drop whole trailing lines, never mid-word
+        text = text[:cut].rstrip() + " …"
+    text = with_tags(text, tags)
+    # "@ahadeeth_14" is the Telegram channel; left as-is Instagram renders it as a mention of
+    # a different account, so it becomes a plain link instead.
+    return text.replace(HANDLE, "قناة التليجرام: t.me/ahadeeth_14")
 
 def graph(method, path, **data):
     import requests

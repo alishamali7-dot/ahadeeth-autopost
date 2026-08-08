@@ -23,7 +23,9 @@ for orig, meta in master.items():
     from PIL import Image
     Image.open(src).convert("RGB").resize((1080, 1350), Image.LANCZOS)\
          .save(dst, quality=92, subsampling=0, optimize=True)
-    ascii_caps[meta["ascii"]] = meta["caption"]
+    cap = meta["caption"]                             # carry tags across a rebuild, else the
+    if not isinstance(cap, dict): cap = {"caption": cap}   # hashtags silently vanish
+    ascii_caps[meta["ascii"]] = {**cap, "tags": meta.get("tags", [])}
     copied += 1
 (HERE / "captions_ascii.json").write_text(json.dumps(ascii_caps, ensure_ascii=False, indent=1), encoding="utf-8")
 print(f"copied {copied} images -> posts/ ; captions_ascii.json written ({len(ascii_caps)})")
